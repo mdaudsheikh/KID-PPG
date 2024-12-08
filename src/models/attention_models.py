@@ -13,8 +13,9 @@ def causal_padding(x, kernel_size):
 
 class ConvolutionBlock(nn.Module):
     
-    def __init__(self, num_filters, kernel_size = 5, dilation_rate = 2, pooling_kernel_size = 2):
+    def __init__(self, input_shape, num_filters, kernel_size = 5, dilation_rate = 2, pooling_kernel_size = 2):
         super(ConvolutionBlock).__init__()
+        self.input_shape = input_shape
         self.kernel_size = kernel_size
         self.conv1 = nn.Conv1d(1, num_filters, kernel_size=self.kernel_size, dilation=dilation_rate)
         self.relu1 = nn.ReLU()
@@ -49,7 +50,7 @@ class KID_PPG(nn.Module):
         super(KID_PPG).__init__()
         input_num_channels, input_height, input_width = input_shape
         self.include_attention_weights = include_attention_weights
-        self.conv_block1 = ConvolutionBlock(32)
+        self.conv_block1 = ConvolutionBlock(32, pooling_kernel_size=4)
         self.conv_block2 = ConvolutionBlock(48)
         self.conv_block3 = ConvolutionBlock(64)
         self.attention = nn.MultiheadAttention(emd_dim = 16, num_heads=4,)
@@ -69,12 +70,14 @@ class KID_PPG(nn.Module):
         x_bvp_t_1 = self.conv_block3(x_bvp_t_1)
         
         
-        query, key, value = x_bvp_t, x_bvp_t_1 # Need to figure out what to do here
+        query, key, value = x_bvp_t, x_bvp_t_1, x_bvp_t_1 # query is the present bvp and key and value are the previous time step's bvp
         x, attention_weights = self.attention(query, key, value)
         x = x + x_bvp_t
+        
         x = self.flatten_layer(x)
         x = self.fc1(x)
         x = self.fc2(x)
+        
         if self.include_attention_weights:
             return x, attention_weights
         else: 
