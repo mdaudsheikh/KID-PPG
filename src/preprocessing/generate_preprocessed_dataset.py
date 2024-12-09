@@ -1,210 +1,167 @@
 import numpy as np
 import torch
-import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from config import Config
 import pickle
-from scipy.io import loadmat
-from preprocessing import preprocessing_Dalia_aligned as pp
-import utils
-import matplotlib.pyplot as plt
 from tqdm import tqdm
-from models.adaptive_linear_model import AdaptiveFilteringModel
+from config import Config
+from preprocessing import preprocess_data as pp
+from training.adaptive_filter_training import train_adaptive_filter
+from utilities import (
+    channel_wise_z_score_denormalization,
+    channel_wise_z_score_normalization,
+)
 
-# Load configuration
-cf = Config(search_type='NAS', root='./data/')
 
 # Constants
-N_EPOCHS = 16000
-BATCH_SIZE = 256
-N_CH = 1
-PATIENCE = 150
-
-
-def channel_wise_z_score_normalization(X):
-    """
-    Normalize each channel (feature) in X independently (per sample).
-    
-    The normalization is done by subtracting the mean and dividing by the standard deviation
-    for each channel (feature) in the data.
-    
-    Args:
-        X: Input data of shape (samples, channels, time_steps)
-        
-    Returns:
-        X: Normalized input data
-        means: Array of shape (samples, channels) containing the means of each channel
-        stds: Array of shape (samples, channels) containing the standard deviations of each channel
-    """
-    # Initialize arrays to store mean and standard deviation for each sample/channel
-    means = np.zeros((X.shape[0], X.shape[1]))  # Mean for each channel
-    stds = np.zeros((X.shape[0], X.shape[1]))   # Std for each channel
-    
-    # Iterate over all samples
-    for i in range(X.shape[0]):
-        sample = X[i, ...]
-        
-        # Normalize each channel in the current sample
-        for j in range(X.shape[1]):  # Iterate over each channel (feature)
-            channel_data = sample[j, ...]
-            
-            # Calculate the mean and standard deviation for the channel
-            channel_mean = np.mean(channel_data)
-            channel_std = np.std(channel_data)
-            
-            # Perform Z-score normalization: (data - mean) / std
-            sample[j, ...] -= channel_mean
-            if channel_std != 0:  # Avoid division by zero
-                sample[j, ...] /= channel_std
-                
-            # Store the mean and std values for later denormalization
-            means[i, j] = channel_mean
-            stds[i, j] = channel_std
-            
-        # Save the normalized sample back to X
-        X[i, ...] = sample
-        
-    return X, means, stds
-
-
-def channel_wise_z_score_denormalization(X, means, stds):
-    """
-    Reverse the Z-score normalization applied to the data.
-    
-    This function applies the reverse operation of the normalization:
-    (data * std) + mean
-    
-    Args:
-        X: Input data of shape (samples, channels, time_steps) to denormalize
-        means: Means for each channel (from normalization)
-        stds: Standard deviations for each channel (from normalization)
-        
-    Returns:
-        X: Denormalized input data
-    """
-    # Iterate over all samples
-    for i in range(X.shape[0]):
-        sample = X[i, ...]
-        
-        # Denormalize each channel in the current sample
-        for j in range(X.shape[1]):  # Iterate over each channel (feature)
-            channel_data = sample[j, ...]
-            
-            # Reverse Z-score normalization: (data * std) + mean
-            if stds[i, j] != 0:  # Avoid multiplication by zero
-                channel_data *= stds[i, j]
-            
-            channel_data += means[i, j]
-            sample[j, ...] = channel_data
-        
-        # Save the denormalized sample back to X
-        X[i, ...] = sample
-        
-    return X
+N_EPOCHS = 500
+CF = Config()
 
 
 def filter_activity_data(cur_X, cur_activity):
     """
-    Filter the data based on changes in activity.
+    Filters the data based on activity changes, normalizes it, applies the adaptive filter model, and then denormalizes it.
     """
-    indexes = np.argwhere(np.abs(np.diff(cur_activity)) > 0).flatten()
-    indexes += 1
-    indexes = np.insert(indexes, 0, 0)
-    indexes = np.insert(indexes, indexes.size, cur_X.shape[0])
-    
+    activity_change_indices = get_activity_change_indices(cur_activity)
+
     filtered_Xs = []
-    for i in tqdm(range(indexes.size - 1)):
-        cur_activity_X = cur_X[indexes[i]:indexes[i + 1]]
-        cur_activity_X, ms, stds = channel_wise_z_score_normalization(cur_activity_X)
-        
-        # Create and apply the adaptive model
-        filtered_X = apply_adaptive_filtering(cur_activity_X)
-        
-        # Denormalize the data after filtering
-        filtered_X = channel_wise_z_score_denormalization(filtered_X, ms, stds)
+    for start, end in zip(activity_change_indices[:-1], activity_change_indices[1:]):
+        cur_activity_X = cur_X[start:end]
+
+        # Normalize the data by channel
+        cur_activity_X, ms, stds = normalize_channels(cur_activity_X)
+
+        # Create, train, and apply the adaptive model
+        model, _ = train_adaptive_filter(
+            cur_activity_X, adaptive_filter_epochs=N_EPOCHS
+        )
+        filtered_X = apply_adaptive_model(model, cur_activity_X)
+
+        # Denormalize the data
+        filtered_X = denormalize_channels(filtered_X, ms, stds)
         filtered_Xs.append(filtered_X)
-    
+
     return np.concatenate(filtered_Xs, axis=0)
 
 
-def apply_adaptive_filtering(cur_activity_X):
+def get_activity_change_indices(activity):
     """
-    Apply the adaptive filtering model to the given data.
+    Returns indices where there is a change in activity (i.e., activity goes from 0 to 1 or vice versa).
     """
-    # Define and train the model
-    model = AdaptiveFilteringModel()
-    optimizer = optim.SGD(model.parameters(), lr=1e-7, momentum=1e-2)
-    
-    # Assuming the model expects the data in a certain shape
-    data_tensor = torch.Tensor(cur_activity_X[..., None])  # Add an extra dimension if necessary
-    model_output = model(data_tensor)  # Apply model
-    
-    return model_output.detach().numpy()  # Get filtered output
+    change_indices = np.argwhere(np.abs(np.diff(activity)) > 0).flatten() + 1
+    return np.insert(change_indices, [0, len(change_indices)], [0, len(activity)])
+
+
+def normalize_channels(data):
+    """
+    Normalizes data by channels (features).
+    """
+    return channel_wise_z_score_normalization(data)
+
+
+def denormalize_channels(data, ms, stds):
+    """
+    Denormalizes data by channels (features).
+    """
+    return channel_wise_z_score_denormalization(data, ms, stds)
+
+
+def apply_adaptive_model(model, data):
+    """
+    Applies the adaptive model to the data and returns the filtered data.
+    """
+    X_acc = data[:, None, 1:, ...]  # Extract accelerometer data
+    X_ppg = data[:, None, :1, ...]  # Extract PPG data
+
+    # Perform inference
+    X_acc_mixed = adaptive_model_inference(model, X_acc, X_ppg)
+
+    return np.hstack((X_ppg, X_acc_mixed.detach().numpy()))
+
+
+def adaptive_model_inference(model, X_acc, X_ppg):
+    """
+    Applies the model to accelerometer data and subtracts the filtered accelerometer data from PPG data.
+    """
+    X_tensor = torch.tensor(X_acc, dtype=torch.float32)
+    X_ppg_tensor = torch.tensor(X_ppg, dtype=torch.float32)
+
+    # Use DataLoader to handle batches
+    dataset = TensorDataset(X_tensor)
+    dataloader = DataLoader(dataset, batch_size=len(X_acc), shuffle=True)
+
+    for inputs in dataloader:
+        X_acc_mixed = model(inputs[0])  # Apply model to input data
+    return X_ppg_tensor - X_acc_mixed
 
 
 def process_group_data(group, X, y, groups, activity):
     """
-    Process and filter data for a specific group.
+    Processes data for a specific group (i.e., filters the data and returns the processed version).
     """
-    cur_X = X[groups == group]
-    cur_y = y[groups == group]
-    cur_activity = activity[groups == group]
-    
+    group_data = X[groups == group]
+    group_labels = y[groups == group]
+    group_activity = activity[groups == group]
+
     # Filter data based on activity changes
-    filtered_X = filter_activity_data(cur_X, cur_activity)
-    
-    return filtered_X, cur_y, groups[groups == group], cur_activity
+    filtered_X = filter_activity_data(group_data, group_activity)
+
+    return filtered_X, group_labels, group_activity
 
 
-def save_processed_data(all_data_X, all_data_y, all_data_groups, all_data_activity, file_path):
+def save_processed_data(
+    all_data_X, all_data_y, all_data_groups, all_data_activity, file_path
+):
     """
-    Save the processed data to a pickle file.
+    Saves the processed data to a pickle file.
     """
     data = {
-        'X': all_data_X,
-        'y': all_data_y,
-        'groups': all_data_groups,
-        'act': all_data_activity
+        "X": all_data_X,
+        "y": all_data_y,
+        "groups": all_data_groups,
+        "act": all_data_activity,
     }
-    with open(file_path, 'wb') as f:
+    with open(file_path, "wb") as f:
         pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
 
 
-def main():
+def generate():
     """
-    Main function to load data, process it, and save the results.
+    Main function to load data, process it for each group, and save the results to a file.
     """
     # Load data
-    X, y, groups, activity = pp.preprocessing(cf.dataset, cf)
+    X, y, groups, activity = pp.preprocessing(CF.dataset, CF)
     activity = activity.flatten()
-    
+
     # Process data for each group
     unique_groups = np.unique(groups)
-    
-    all_data_X = []
-    all_data_y = []
-    all_data_groups = []
-    all_data_activity = []
-    
-    for group in unique_groups:
+
+    all_data_X, all_data_y, all_data_groups, all_data_activity = [], [], [], []
+
+    # for group in unique_groups:
+    for group in tqdm(unique_groups):
         print(f"Processing group S{int(group)}")
-        filtered_X, cur_y, cur_groups, cur_activity = process_group_data(group, X, y, groups, activity)
-        
+        filtered_X, group_labels, group_activity = process_group_data(
+            group, X, y, groups, activity
+        )
+
         # Collect processed data for the group
         all_data_X.append(filtered_X)
-        all_data_y.append(cur_y)
-        all_data_groups.append(cur_groups)
-        all_data_activity.append(cur_activity)
-    
+        all_data_y.append(group_labels)
+        all_data_groups.append(groups[groups == group])
+        all_data_activity.append(group_activity)
+
     # Combine all groups' data
     all_data_X = np.concatenate(all_data_X, axis=0)
     all_data_y = np.concatenate(all_data_y, axis=0)
     all_data_groups = np.concatenate(all_data_groups, axis=0)
     all_data_activity = np.concatenate(all_data_activity, axis=0)
-    
+
     # Save the processed data
-    save_processed_data(all_data_X, all_data_y, all_data_groups, all_data_activity, cf.path_PPG_Dalia + 'slimmed_dalia_aligned_prefiltered_80000.pkl')
-
-
-if __name__ == "__main__":
-    main()
+    save_processed_data(
+        all_data_X,
+        all_data_y,
+        all_data_groups,
+        all_data_activity,
+        CF.path_PPG_Dalia + r"\slimmed_dalia_aligned_prefiltered_80000.pkl",
+    )
+    print("Data processing and saving complete.")
