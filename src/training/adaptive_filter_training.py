@@ -11,7 +11,7 @@ def train_adaptive_filter(
     cur_activity_X: np.ndarray,
     adaptive_filter_epochs: int = 500,
     batch_size: int = 32,
-    verbose=True,
+    verbose=False,
 ):
     # Convert the numpy data to torch tensors
     X = cur_activity_X[:, 1:, ...]  # Exclude the first channel for acceleration signal
@@ -61,7 +61,7 @@ def train_adaptive_filter(
 
         # Optionally, print the loss at intervals or at the end of each epoch
         if verbose:
-            if (epoch + 1) % 100 == 0:
+            if (epoch + 1) % 1000 == 0:
                 print(
                     f"Epoch [{epoch + 1}/{adaptive_filter_epochs}], Loss: {avg_loss:.4f}"
                 )
