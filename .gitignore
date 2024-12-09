@@ -2,7 +2,7 @@
 src/data/
 
 # Test notebook to run local tests
-src/test.notebook.py
+src/test_notebook.ipynb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -5,12 +5,11 @@ import random
 import os
 import config as cf
 
+FS_PPG_DALIA = 32
+FS_ACTIVITY = 4
+
 
 def preprocessing(dataset, cf=cf):
-    # Define sampling frequencies for PPG and acceleration data
-    fs_IEEE_Training = 125  # Unused but retained for context
-    fs_PPG_Dalia = 32
-    fs_activity = 4
 
     # Initialize dictionaries to store signals, activities, and labels
     S, ppg, acc, activity, ground_truth = {}, {}, {}, {}, {}
@@ -105,10 +104,10 @@ def create_windows(ppg, acc, activity, cf):
 
     # Step 2: Define window shape and stride for sliding windows
     window_shape = (
-        cf.time_window * 32,
+        cf.time_window * FS_PPG_DALIA,
         4,
     )  # Example window: (time_window_samples, 4 features)
-    stride = 32 * 2  # 32 samples with overlap
+    stride = FS_PPG_DALIA * 2  # 32 samples with overlap
 
     # Step 3: Create sliding windows for the concatenated signals
     windows = view_as_windows(ppg_acc_data, window_shape, stride)
@@ -143,10 +142,10 @@ def create_activity_windows(activity, cf):
 
     # Step 1: Define the window shape and stride for sliding windows
     window_shape = (
-        cf.time_window * 4,
+        cf.time_window * FS_ACTIVITY,
         1,
     )  # 8 * 4 being 32 mean the window size is (32, 1)
-    stride = 4 * 2  # Mean the window will overlap by 24 data points
+    stride = FS_ACTIVITY * 2  # Mean the window will overlap by 24 data points
 
     # Create the windows
     activity_windows_raw = view_as_windows(activity, window_shape, stride)

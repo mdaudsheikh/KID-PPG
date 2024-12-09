@@ -3,7 +3,7 @@ import torch.optim as optim
 import torch.utils.data as data
 from sklearn.utils import shuffle
 import pandas as pd
-from preprocessing import preprocessing_Dalia_aligned_preproc as pp
+from preprocessing import generate_preprocessed_dataset as pp
 from sklearn.model_selection import LeaveOneGroupOut
 from config import Config
 from models.attention_models import KID_PPG
@@ -15,6 +15,7 @@ import torch.nn as nn
 N_EPOCHS = 500
 BATCH_SIZE = 256
 N_CH = 2
+CF = Config()
 
 
 # Function to create temporal pairs
@@ -68,7 +69,7 @@ def train_model(model, train_loader, val_loader, n_epochs, device):
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
 
             # Forward pass
-            y_pred = model(X_batch)
+            y_pred = model(X_batch[..., 0], X_batch[..., 1])
             loss = mse_loss(y_batch, y_pred)
 
             # Backward pass
@@ -92,18 +93,17 @@ def validate_model(model, val_loader, device):
     with torch.no_grad():
         for X_batch, y_batch in val_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-            y_pred = model(X_batch)
+            y_pred = model(X_batch[..., 0], X_batch[..., 1])
             loss = mse_loss(y_batch, y_pred)
             total_loss += loss.item()
     print(f"Validation Loss: {total_loss / len(val_loader)}")
 
 
 # Example of data split using LeaveOneGroupOut
-def run_temp_model_training():
+def run_temp_model_training(n_epochs):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"The device used for training is: {device}")
-    cf = Config()  # Assuming your config is loaded here
-    X, y, groups, activity = pp.preprocessing(cf.dataset, cf)
+    X, y, groups, activity = pp.preprocessing(n_epochs=n_epochs)
     X = X[:, 0, :]
     X, y, groups, activity = create_temporal_pairs(X, y, groups, activity)
 
@@ -126,7 +126,7 @@ def run_temp_model_training():
         val_loader = create_dataloaders(X_val_test, y_val_test, batch_size=BATCH_SIZE)
 
         # Build Model
-        model = KID_PPG(input_shape=(X.shape[1], N_CH), n_ch=N_CH)
+        model = KID_PPG(CF.input_shape, include_attention_weights=False)
 
         # Train Model
         train_model(

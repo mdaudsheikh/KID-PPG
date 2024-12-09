@@ -4,13 +4,14 @@ from torch.utils.data import DataLoader, TensorDataset
 from models.adaptive_linear_model import MotionArtifactSeparator
 from loss.adaptive_filter_loss import AdaptiveFilterLoss
 import numpy as np
+import tqdm
 
 
 def train_adaptive_filter(
     cur_activity_X: np.ndarray,
     adaptive_filter_epochs: int = 500,
     batch_size: int = 32,
-    verbose=False,
+    verbose=True,
 ):
     # Convert the numpy data to torch tensors
     X = cur_activity_X[:, 1:, ...]  # Exclude the first channel for acceleration signal
@@ -33,7 +34,7 @@ def train_adaptive_filter(
     model.train()
     epoch_loss_list = []
 
-    for epoch in range(adaptive_filter_epochs):
+    for epoch in tqdm.tqdm(range(adaptive_filter_epochs)):
         running_loss = 0.0
         for i, (inputs, targets) in enumerate(dataloader):
             optimizer.zero_grad()  # Zero the gradients
