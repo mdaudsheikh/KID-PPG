@@ -9,6 +9,7 @@ from config import Config
 from models.attention_models import KID_PPG
 import time
 import numpy as np
+from typing import List
 import torch.nn as nn
 
 # Constants
@@ -61,6 +62,7 @@ def train_model(model, train_loader, val_loader, n_epochs, device):
     optimizer = optim.Adam(model.parameters(), lr=0.0005)
     model.to(device)
     mse_loss = nn.MSELoss()
+    training_loss_list, val_loss_list = [], []
 
     for epoch in range(n_epochs):
         model.train()
@@ -79,10 +81,14 @@ def train_model(model, train_loader, val_loader, n_epochs, device):
 
             total_loss += loss.item()
 
-        print(f"Epoch {epoch+1}/{n_epochs}, Loss: {total_loss / len(train_loader)}")
+        training_loss_list.append(total_loss / len(train_loader))
+        val_loss = validate_model(model, val_loader, device)
+        val_loss_list.append(val_loss)
+        if epoch + 1 % 100 == 0:
+            print(f"Epoch {epoch+1}/{n_epochs}, Loss: {total_loss / len(train_loader)}")
+            print(f"Validation Loss: {val_loss}")
 
-        # Validation (early stopping logic can be added here)
-        validate_model(model, val_loader, device)
+    return training_loss_list, val_loss_list, model
 
 
 # Validate the model
@@ -90,22 +96,30 @@ def validate_model(model, val_loader, device):
     model.eval()
     total_loss = 0
     mse_loss = nn.MSELoss()
+
     with torch.no_grad():
         for X_batch, y_batch in val_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             y_pred = model(X_batch[..., 0], X_batch[..., 1])
             loss = mse_loss(y_batch, y_pred)
             total_loss += loss.item()
-    print(f"Validation Loss: {total_loss / len(val_loader)}")
+    val_loss = total_loss / len(val_loader)
+    return val_loss
 
 
 # Example of data split using LeaveOneGroupOut
 def run_temp_model_training(n_epochs):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"The device used for training is: {device}")
+
     X, y, groups, activity = pp.preprocessing(n_epochs=n_epochs)
     X = X[:, 0, :]
     X, y, groups, activity = create_temporal_pairs(X, y, groups, activity)
+
+    # Init model scoring parameter and function
+    _model_score = lambda train_losses, val_losses: max(train_losses) + max(val_losses)
+    current_best_score = 0
+    best_model = None
 
     # Shuffle group ids and split into training and validation sets
     group_ids = np.unique(groups)
@@ -113,8 +127,10 @@ def run_temp_model_training(n_epochs):
     splits = np.array_split(
         group_ids, 4
     )  # Example: split data into 4 parts for validation
+    split_loss = {}
 
-    for split in splits:
+    for i, split in enumerate(splits):
+        print(f"Starting training of split: {split}")
         groups_pd = pd.Series(groups)
         test_val_indexes = groups_pd.isin(split)
         train_indexes = ~test_val_indexes
@@ -129,10 +145,20 @@ def run_temp_model_training(n_epochs):
         model = KID_PPG(CF.input_shape, include_attention_weights=False)
 
         # Train Model
-        train_model(
+        training_loss_list, val_loss_list, model = train_model(
             model,
             train_loader,
             val_loader,
             n_epochs=N_EPOCHS,
             device=device,
         )
+
+        # Make data structure for training losses and update best model
+        if _model_score(training_loss_list, val_loss_list) > current_best_score:
+            best_model = model
+        split_loss[i] = {
+            "split": split,
+            "training_loss": training_loss_list,
+            "validation_loss_list": val_loss_list,
+        }
+    return split_loss, best_model
