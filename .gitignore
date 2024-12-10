@@ -1,5 +1,5 @@
 # Source data itself
-src/data/
+src/data/PPG_FieldStudy/
 
 # Test notebook to run local tests
 src/test_notebook.ipynb
